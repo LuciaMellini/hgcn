@@ -58,6 +58,7 @@ The ```data/``` folder contains source files for:
   * Pubmed
   * Disease 
   * Airport
+  * Kg
 
 To run this code on new datasets, please add corresponding data processing and loading in ```load_data_nc``` and ```load_data_lp``` functions in ```utils/data_utils.py```.
 To create a dataset from node and edge files in `.csv` format, use the following command:
