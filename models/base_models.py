@@ -12,6 +12,7 @@ import manifolds
 import models.encoders as encoders
 from models.decoders import model2decoder
 from utils.eval_utils import acc_f1
+from torch.amp import autocast
 
 
 class BaseModel(nn.Module):
@@ -102,6 +103,7 @@ class LPModel(BaseModel):
 
     def decode(self, h, idx):
         if self.manifold_name == 'Euclidean':
+            h=h.clone()
             h = self.manifold.normalize(h)
         emb_in = h[idx[:, 0], :]
         emb_out = h[idx[:, 1], :]
@@ -116,8 +118,9 @@ class LPModel(BaseModel):
             edges_false = data[f'{split}_edges_false']
         pos_scores = self.decode(embeddings, data[f'{split}_edges'])
         neg_scores = self.decode(embeddings, edges_false)
-        loss = F.binary_cross_entropy(pos_scores, torch.ones_like(pos_scores))
-        loss += F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
+        with autocast(device_type='cuda', enabled=False):
+            loss = F.binary_cross_entropy(pos_scores, torch.ones_like(pos_scores))
+            loss += F.binary_cross_entropy(neg_scores, torch.zeros_like(neg_scores))
         if pos_scores.is_cuda:
             pos_scores = pos_scores.cpu()
             neg_scores = neg_scores.cpu()
