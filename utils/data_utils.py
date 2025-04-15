@@ -95,9 +95,7 @@ def mask_edges(adj, val_prop, test_prop, seed):
     val_edges, test_edges, train_edges = pos_edges[:n_val], pos_edges[n_val:n_test + n_val], pos_edges[n_test + n_val:]
     val_edges_false, test_edges_false, train_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val], neg_edges[n_test + n_val:]
     adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
-    return adj_train, torch.LongTensor(train_edges), torch.LongTensor(train_edges_false), torch.LongTensor(val_edges), \
-           torch.LongTensor(val_edges_false), torch.LongTensor(test_edges), torch.LongTensor(
-            test_edges_false)   #torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(           test_edges_false)  
+    return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(           test_edges_false)  
 
 
 def split_data(labels, val_prop, test_prop, seed):
@@ -246,7 +244,7 @@ def load_synthetic_data(dataset_str, use_feats, data_path):
     else:
         features = sp.eye(adj.shape[0])
     labels = np.load(os.path.join(data_path, "{}.labels.npy".format(dataset_str)), allow_pickle=True)
-    return sp.csr_matrix(adj, ), features, labels
+    return sp.csr_matrix(adj, dtype=np.int8), features, labels
 
 
 def load_data_airport(dataset_str, data_path, return_label=False):
