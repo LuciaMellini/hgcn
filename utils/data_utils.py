@@ -64,7 +64,7 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     )
     values = torch.Tensor(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape)
+    return torch.sparse_coo_tensor(indices, values, shape)
 
 
 def augment(adj, features, normalize_feats=True):
@@ -81,11 +81,11 @@ def augment(adj, features, normalize_feats=True):
 
 def mask_edges(adj, val_prop, test_prop, seed):
     np.random.seed(seed)  # get tp edges
-    x, y = sp.triu(adj).nonzero()
+    x, y = adj.nonzero()
     pos_edges = np.array(list(zip(x, y)))
     np.random.shuffle(pos_edges)
     # get tn edges
-    x, y = sp.triu(sp.csr_matrix(1. - adj.toarray())).nonzero()
+    x, y = sp.csr_matrix(1. - adj.toarray()).nonzero()
     neg_edges = np.array(list(zip(x, y)))
     np.random.shuffle(neg_edges)
 
@@ -93,13 +93,11 @@ def mask_edges(adj, val_prop, test_prop, seed):
     n_val = int(m_pos * val_prop)
     n_test = int(m_pos * test_prop)
     val_edges, test_edges, train_edges = pos_edges[:n_val], pos_edges[n_val:n_test + n_val], pos_edges[n_test + n_val:]
-    val_edges_false, test_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val]
-    train_edges_false = np.concatenate([neg_edges, val_edges, test_edges], axis=0)
-    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape)
-    adj_train = adj_train + adj_train.T
+    val_edges_false, test_edges_false, train_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val], neg_edges[n_test + n_val:]
+    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
     return adj_train, torch.LongTensor(train_edges), torch.LongTensor(train_edges_false), torch.LongTensor(val_edges), \
            torch.LongTensor(val_edges_false), torch.LongTensor(test_edges), torch.LongTensor(
-            test_edges_false)  
+            test_edges_false)   #torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(           test_edges_false)  
 
 
 def split_data(labels, val_prop, test_prop, seed):
@@ -139,8 +137,8 @@ def load_data_lp(dataset, use_feats, data_path):
         adj, features = load_data_airport(dataset, data_path, return_label=False)
     elif dataset == 'kg':
         adj, features = load_data_kg(dataset, data_path, return_label=False)
-    elif dataset.startswith('transitive'):
-        adj, features = load_data_kg(dataset, data_path, return_label=False)
+    elif dataset.startswith(('tr', 'Disease', 'GO', 'Genomic', 'Phen')):
+        adj, features = load_synthetic_data(dataset,use_feats, data_path)[:2]
     else:
         raise FileNotFoundError('Dataset {} is not supported.'.format(dataset))
     data = {'adj_train': adj, 'features': features}
@@ -247,8 +245,8 @@ def load_synthetic_data(dataset_str, use_feats, data_path):
         features = sp.load_npz(os.path.join(data_path, "{}.feats.npz".format(dataset_str)))
     else:
         features = sp.eye(adj.shape[0])
-    labels = np.load(os.path.join(data_path, "{}.labels.npy".format(dataset_str)))
-    return sp.csr_matrix(adj), features, labels
+    labels = np.load(os.path.join(data_path, "{}.labels.npy".format(dataset_str)), allow_pickle=True)
+    return sp.csr_matrix(adj, ), features, labels
 
 
 def load_data_airport(dataset_str, data_path, return_label=False):
