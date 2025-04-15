@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
 from torch.nn.modules.module import Module
+from torch.utils.checkpoint import checkpoint
 
 from layers.att_layers import DenseAtt
 
@@ -68,9 +69,12 @@ class HyperbolicGraphConvolution(nn.Module):
 
     def forward(self, input):
         x, adj = input
-        h = self.linear.forward(x)
-        h = self.agg.forward(h, adj)
-        h = self.hyp_act.forward(h)
+        h = checkpoint(self.linear, x, use_reentrant=False)
+        h = checkpoint(self.agg, h, adj, use_reentrant=False)
+        h = checkpoint(self.hyp_act, h, use_reentrant=False)
+        h= self.linear(x)
+        h = self.agg(h, adj)
+        h = self.hyp_act(h)
         output = h, adj
         return output
 
@@ -145,10 +149,12 @@ class HypAgg(Module):
                 output = self.manifold.proj(self.manifold.expmap(x, support_t, c=self.c), c=self.c)
                 return output
             else:
-                adj_att = self.att(x_tangent, adj)
-                support_t = torch.matmul(adj_att, x_tangent)
+                with torch.amp.autocast('cuda',enabled=False):
+                    adj_att = self.att(x_tangent, adj)
+                    support_t = torch.matmul(adj_att, x_tangent)
         else:
-            support_t = torch.spmm(adj, x_tangent)
+            with torch.amp.autocast('cuda',enabled=False):
+                support_t = torch.spmm(adj, x_tangent.float())
         output = self.manifold.proj(self.manifold.expmap0(support_t, c=self.c), c=self.c)
         return output
 
@@ -176,4 +182,4 @@ class HypAct(Module):
     def extra_repr(self):
         return 'c_in={}, c_out={}'.format(
             self.c_in, self.c_out
-        )
+    )
