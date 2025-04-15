@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.amp import autocast
 
 
 class DenseAtt(nn.Module):
@@ -33,22 +34,26 @@ class SpecialSpmmFunction(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, indices, values, shape, b):
-        assert indices.requires_grad == False
-        a = torch.sparse_coo_tensor(indices, values, shape)
-        ctx.save_for_backward(a, b)
-        ctx.N = shape[0]
-        return torch.matmul(a, b)
+        with torch.amp.autocast('cuda', enabled=False):
+            assert indices.requires_grad == False
+            a = torch.sparse_coo_tensor(indices, values, shape)
+            ctx.save_for_backward(a, b)
+            ctx.N = shape[0]
+            return torch.matmul(a.float(), b.float())
 
     @staticmethod
     def backward(ctx, grad_output):
         a, b = ctx.saved_tensors
         grad_values = grad_b = None
         if ctx.needs_input_grad[1]:
+            b = b.to(grad_output.dtype)
             grad_a_dense = grad_output.matmul(b.t())
             edge_idx = a._indices()[0, :] * ctx.N + a._indices()[1, :]
             grad_values = grad_a_dense.view(-1)[edge_idx]
         if ctx.needs_input_grad[3]:
-            grad_b = a.t().matmul(grad_output)
+            with autocast('cuda', enabled=False):
+                grad_b = a.t().to_dense().matmul(grad_output)
+                grad_b = a.t().matmul(grad_output)
         return None, grad_values, None, grad_b
 
 

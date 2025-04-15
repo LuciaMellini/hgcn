@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from torch.nn.modules.module import Module
 from torch.nn.parameter import Parameter
 
+from torch.amp import autocast
+
 
 def get_dim_act(args):
     """
@@ -44,7 +46,8 @@ class GraphConvolution(Module):
         hidden = self.linear.forward(x)
         hidden = F.dropout(hidden, self.dropout, training=self.training)
         if adj.is_sparse:
-            support = torch.spmm(adj, hidden)
+            with autocast('cuda', enabled=False):
+                support = torch.spmm(adj, hidden.float()).clone()
         else:
             support = torch.mm(adj, hidden)
         output = self.act(support), adj
