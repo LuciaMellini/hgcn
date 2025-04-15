@@ -33,7 +33,7 @@ class Artanh(torch.autograd.Function):
         x = x.clamp(-1 + 1e-15, 1 - 1e-15)
         ctx.save_for_backward(x)
         z = x.double()
-        return (torch.log_(1 + z).sub_(torch.log_(1 - z))).mul_(0.5).to(x.dtype)
+        return ((torch.log(1 + z) - torch.log(1 - z)) * 0.5).to(x.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -46,7 +46,7 @@ class Arsinh(torch.autograd.Function):
     def forward(ctx, x):
         ctx.save_for_backward(x)
         z = x.double()
-        return (z + torch.sqrt_(1 + z.pow(2))).clamp_min_(1e-15).log_().to(x.dtype)
+        return torch.log((z + torch.sqrt(1 + z.pow(2))).clamp_min(1e-15)).to(x.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -60,7 +60,7 @@ class Arcosh(torch.autograd.Function):
         x = x.clamp(min=1.0 + 1e-15)
         ctx.save_for_backward(x)
         z = x.double()
-        return (z + torch.sqrt_(z.pow(2) - 1)).clamp_min_(1e-15).log_().to(x.dtype)
+        return torch.log((z + torch.sqrt(z.pow(2) - 1)).clamp_min(1e-15)).to(x.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):

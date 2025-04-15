@@ -123,20 +123,22 @@ class RiemannianAdam(OptimMixin, torch.optim.Adam):
                     exp_avg = state["exp_avg"]
                     exp_avg_sq = state["exp_avg_sq"]
                     # actual step
-                    grad.add_(weight_decay, point)
+                    grad=grad + weight_decay + point
                     grad = manifold.egrad2rgrad(point, grad, c)
-                    exp_avg.mul_(betas[0]).add_(1 - betas[0], grad)
-                    exp_avg_sq.mul_(betas[1]).add_(
-                            1 - betas[1], manifold.inner(point, c, grad, keepdim=True)
+                    exp_avg = exp_avg * betas[0] + grad * (1 - betas[0])
+                    exp_avg_sq = (
+                        exp_avg_sq * betas[1]
+                        + (1 - betas[1]) * manifold.inner(point, c, grad, keepdim=True)
                     )
+
                     if amsgrad:
                         max_exp_avg_sq = state["max_exp_avg_sq"]
                         # Maintains the maximum of all 2nd moment running avg. till now
                         torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
                         # Use the max. for normalizing running avg. of gradient
-                        denom = max_exp_avg_sq.sqrt().add_(eps)
+                        denom = max_exp_avg_sq.sqrt() + eps
                     else:
-                        denom = exp_avg_sq.sqrt().add_(eps)
+                        denom = exp_avg_sq.sqrt() + eps
                     group["step"] += 1
                     bias_correction1 = 1 - betas[0] ** group["step"]
                     bias_correction2 = 1 - betas[1] ** group["step"]
