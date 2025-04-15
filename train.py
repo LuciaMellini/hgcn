@@ -15,9 +15,11 @@ from config import parser
 from models.base_models import NCModel, LPModel
 from utils.data_utils import load_data
 from utils.train_utils import get_dir_name, format_metrics
+from torch.amp import autocast, GradScaler
 
 
 def train(args):
+    
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if int(args.double_precision):
@@ -66,6 +68,7 @@ def train(args):
 
     # Model and optimizer
     model = Model(args)
+    model.to(memory_format=torch.channels_last)
     logging.info(str(model))
     optimizer = getattr(optimizers, args.optimizer)(params=model.parameters(), lr=args.lr,
                                                     weight_decay=args.weight_decay)
@@ -74,6 +77,8 @@ def train(args):
         step_size=int(args.lr_reduce_freq),
         gamma=float(args.gamma)
     )
+    scaler = GradScaler('cuda')
+
     tot_params = sum([np.prod(p.size()) for p in model.parameters()])
     logging.info(f"Total number of parameters: {tot_params}")
     if args.cuda is not None and int(args.cuda) >= 0 :
@@ -82,50 +87,73 @@ def train(args):
         for x, val in data.items():
             if torch.is_tensor(data[x]):
                 data[x] = data[x].to(args.device)
+            #logging.info(f"Data tensor {x} has dtype {data[x].dtype}")
+
     # Train model
     t_total = time.time()
     counter = 0
     best_val_metrics = model.init_metric_dict()
     best_test_metrics = None
     best_emb = None
+
     for epoch in range(args.epochs):
+        #logging.info("Before training: "+torch.cuda.memory_summary())
+        torch.cuda.empty_cache()
         t = time.time()
-        model.train()
-        optimizer.zero_grad()
-        embeddings = model.encode(data['features'], data['adj_train_norm'])
+        model.train()    
+        #with torch.autograd.set_detect_anomaly(True):
+
+        with autocast(device_type='cuda'): 
+            embeddings = model.encode(data['features'], data['adj_train_norm'])
+        #logging.info("After model encode: "+torch.cuda.memory_summary())
+
         train_metrics = model.compute_metrics(embeddings, data, 'train')
-        train_metrics['loss'].backward()
+        loss = train_metrics['loss']
+            #logging.info("After compute metrics: " + torch.cuda.memory_summary())
+
+        # del embeddings
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        #logging.info("After delete embeddings: " + torch.cuda.memory_summary())
+        scaler.scale(loss).backward()
+
+
         if args.grad_clip is not None:
             max_norm = float(args.grad_clip)
             all_params = list(model.parameters())
             for param in all_params:
                 torch.nn.utils.clip_grad_norm_(param, max_norm)
-        optimizer.step()
+        # optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad(set_to_none=True)
         lr_scheduler.step()
         if (epoch + 1) % args.log_freq == 0:
             logging.info(" ".join(['Epoch: {:04d}'.format(epoch + 1),
-                                   'lr: {}'.format(lr_scheduler.get_lr()[0]),
-                                   format_metrics(train_metrics, 'train'),
-                                   'time: {:.4f}s'.format(time.time() - t)
-                                   ]))
+                                'lr: {}'.format(lr_scheduler.get_last_lr()[0]),
+                                format_metrics(train_metrics, 'train'),
+                                'time: {:.4f}s'.format(time.time() - t)
+                                ]))
         if (epoch + 1) % args.eval_freq == 0:
             model.eval()
-            embeddings = model.encode(data['features'], data['adj_train_norm'])
-            val_metrics = model.compute_metrics(embeddings, data, 'val')
-            if (epoch + 1) % args.log_freq == 0:
-                logging.info(" ".join(['Epoch: {:04d}'.format(epoch + 1), format_metrics(val_metrics, 'val')]))
-            if model.has_improved(best_val_metrics, val_metrics):
-                best_test_metrics = model.compute_metrics(embeddings, data, 'test')
-                best_emb = embeddings.cpu()
-                if args.save:
-                    np.save(os.path.join(save_dir, 'embeddings.npy'), best_emb.detach().numpy())
-                best_val_metrics = val_metrics
-                counter = 0
-            else:
-                counter += 1
-                if counter == args.patience and epoch > args.min_epochs:
-                    logging.info("Early stopping")
-                    break
+            with torch.no_grad(): 
+                with autocast(device_type='cuda',dtype=torch.bfloat16):
+                    embeddings = model.encode(data['features'], data['adj_train_norm'])
+                    val_metrics = model.compute_metrics(embeddings, data, 'val')
+                    if (epoch + 1) % args.log_freq == 0:
+                        logging.info(" ".join(['Epoch: {:04d}'.format(epoch + 1), format_metrics(val_metrics, 'val')]))
+                    if model.has_improved(best_val_metrics, val_metrics):
+                        best_test_metrics = model.compute_metrics(embeddings, data, 'test')
+                        best_emb = embeddings.cpu()
+                        if args.save:
+                            np.save(os.path.join(save_dir, 'embeddings.npy'), best_emb.detach().numpy())
+                        best_val_metrics = val_metrics
+                        counter = 0
+                    else:
+                        counter += 1
+                        if counter == args.patience and epoch > args.min_epochs:
+                            logging.info("Early stopping")
+                            break
 
     logging.info("Optimization Finished!")
     logging.info("Total time elapsed: {:.4f}s".format(time.time() - t_total))
@@ -147,5 +175,7 @@ def train(args):
         logging.info(f"Saved model in {save_dir}")
 
 if __name__ == '__main__':
-    args = parser.parse_args()
+    args = parser.parse_args()    
+    torch.cuda.empty_cache()
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
     train(args)
