@@ -84,13 +84,15 @@ def mask_edges_rnd(adj, val_prop, test_prop, seed):
 
     m_pos = len(pos_edges)
     n_val = int(m_pos * val_prop)
-    n_test = int(m_pos * test_prop)
+    n_test = int(m_pos * test_prop)   
     val_edges, test_edges, train_edges = pos_edges[:n_val], pos_edges[n_val:n_test + n_val], pos_edges[n_test + n_val:]
+
     val_edges_false, test_edges_false, train_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val], neg_edges[n_test + n_val:]
+
     adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
     return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(test_edges_false)  
 
-def mask_edges(adj, edges):
+def mask_edges(adj, edges, neg_sampling):
     train_idx = edges[edges['split'] == 'train'].index
     valid_idx = edges[edges['split'] == 'valid'].index
     test_idx = edges[edges['split'] == 'test'].index
@@ -99,9 +101,11 @@ def mask_edges(adj, edges):
     train_edges = edges.loc[train_idx, ['subject', 'object']].values
     val_edges = edges.loc[valid_idx, ['subject', 'object']].values
     test_edges = edges.loc[test_idx, ['subject', 'object']].values
-    train_edges_false = train_edges.copy()
-    val_edges_false = val_edges.copy()
-    test_edges_false = test_edges.copy()
+
+    if neg_sampling==-1:
+        train_edges_false = np.array()
+        val_edges_false = np.array()
+        test_edges_false = np.array()
     adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
     return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(test_edges_false)  
 
@@ -134,7 +138,7 @@ def bin_feat(feat, bins):
 # ############### LINK PREDICTION DATA LOADERS ####################################
 
 
-def load_data_lp(dataset, data_path, use_feats, data_split, val_prop, test_prop, split_seed, normalize_adj, normalize_feats):
+def load_data_lp(dataset, data_path, use_feats, data_split, val_prop, test_prop, split_seed, normalize_adj, normalize_feats, neg_sampling):
     nodes, edges = None, None
     if dataset in ['cora', 'pubmed']:
         adj, features = load_citation_data(dataset, use_feats, data_path)[:2]
@@ -143,9 +147,11 @@ def load_data_lp(dataset, data_path, use_feats, data_split, val_prop, test_prop,
     elif dataset == 'airport':
         adj, features = load_data_airport(dataset, data_path, return_label=False)
     elif dataset.startswith(('tr', 'Disease', 'GO', 'Genomic', 'Phen', 'split')):
-        # nodes, edges = id_string_to_numerical(dataset, data_path)
-        # adj, features = load_data_kg(nodes, edges, use_feats)[:2]
         adj, features = load_synthetic_data(dataset, use_feats, data_path)[:2]
+        
+    elif dataset.startswith('split'):
+        nodes, edges = id_string_to_numerical(dataset, data_path)
+        adj, features = load_data_kg(nodes, edges, use_feats)[:2]
 
     else:
         raise FileNotFoundError('Dataset {} is not supported.'.format(dataset))
@@ -159,7 +165,7 @@ def load_data_lp(dataset, data_path, use_feats, data_split, val_prop, test_prop,
             )
     else:
         adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
-                    adj, edges
+                    adj, edges, neg_sampling
             )
         
     data['adj_train'] = adj_train

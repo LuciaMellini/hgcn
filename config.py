@@ -52,6 +52,7 @@ config_args = {
         'normalize-adj': (1, 'whether to row-normalize the adjacency matrix'),
         'split-seed': (1234, 'seed for data splits (train/test/val)'),
         'data-split': (True, 'path to data split file'),
+        'neg-sampling': (-1, 'amount of negative samples to use for link prediction, -1 for no negative sampling'),
     }
 }
 
