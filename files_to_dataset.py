@@ -16,15 +16,15 @@ if __name__ == '__main__':
     nodes = pd.read_csv(nodes_path)
     edges = pd.read_csv(edges_path)
     
-    G = nx.Graph()
+    G = nx.DiGraph()
 
     for idx, row in nodes.iterrows():
         G.add_node(row['name'])
-        G.nodes[row['name']]['feat'] = row['type']
+        G.nodes[row['name']]['label'] = row['type']
 
     for idx, row in edges.iterrows():
         G.add_edge(row['subject'], row['object'])
-        G.edges[row['subject'], row['object']]['pred'] = row['predicate']
+        G.edges[row['subject'], row['object']]['feature'] = row['predicate']
         
     pickle.dump(G, open(output_path, 'wb'))
     

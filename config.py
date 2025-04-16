@@ -51,6 +51,7 @@ config_args = {
         'normalize-feats': (1, 'whether to normalize input node features'),
         'normalize-adj': (1, 'whether to row-normalize the adjacency matrix'),
         'split-seed': (1234, 'seed for data splits (train/test/val)'),
+        'data-split': (True, 'path to data split file'),
     }
 }
 

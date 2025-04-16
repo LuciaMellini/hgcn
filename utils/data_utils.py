@@ -5,29 +5,22 @@ import sys
 
 import networkx as nx
 import numpy as np
+import pandas as pd
 import scipy.sparse as sp
+
 import torch
+
+from sklearn.preprocessing import LabelEncoder
+
 
 
 def load_data(args, datapath):
     if args.task == 'nc':
         data = load_data_nc(args.dataset, args.use_feats, datapath, args.split_seed)
     else:
-        data = load_data_lp(args.dataset, args.use_feats, datapath)
-        adj = data['adj_train']
-        if args.task == 'lp':
-            adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
-                    adj, args.val_prop, args.test_prop, args.split_seed
-            )
-            data['adj_train'] = adj_train
-            data['train_edges'], data['train_edges_false'] = train_edges, train_edges_false
-            data['val_edges'], data['val_edges_false'] = val_edges, val_edges_false
-            data['test_edges'], data['test_edges_false'] = test_edges, test_edges_false
-    data['adj_train_norm'], data['features'] = process(
-            data['adj_train'], data['features'], args.normalize_adj, args.normalize_feats
-    )
-    if args.dataset == 'airport':
-        data['features'] = augment(data['adj_train'], data['features'])
+        data = load_data_lp(args.dataset, datapath, args.use_feats, args.data_split, args.val_prop, args.test_prop, args.split_seed, args.normalize_adj, args.normalize_feats)
+        
+       
     return data
 
 
@@ -79,7 +72,7 @@ def augment(adj, features, normalize_feats=True):
 # ############### DATA SPLITS #####################################################
 
 
-def mask_edges(adj, val_prop, test_prop, seed):
+def mask_edges_rnd(adj, val_prop, test_prop, seed):
     np.random.seed(seed)  # get tp edges
     x, y = adj.nonzero()
     pos_edges = np.array(list(zip(x, y)))
@@ -95,7 +88,22 @@ def mask_edges(adj, val_prop, test_prop, seed):
     val_edges, test_edges, train_edges = pos_edges[:n_val], pos_edges[n_val:n_test + n_val], pos_edges[n_test + n_val:]
     val_edges_false, test_edges_false, train_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val], neg_edges[n_test + n_val:]
     adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
-    return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(           test_edges_false)  
+    return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(test_edges_false)  
+
+def mask_edges(adj, edges):
+    train_idx = edges[edges['split'] == 'train'].index
+    valid_idx = edges[edges['split'] == 'valid'].index
+    test_idx = edges[edges['split'] == 'test'].index
+
+    # Extract subject-object pairs as numpy arrays
+    train_edges = edges.loc[train_idx, ['subject', 'object']].values
+    val_edges = edges.loc[valid_idx, ['subject', 'object']].values
+    test_edges = edges.loc[test_idx, ['subject', 'object']].values
+    train_edges_false = train_edges.copy()
+    val_edges_false = val_edges.copy()
+    test_edges_false = test_edges.copy()
+    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
+    return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(test_edges_false)  
 
 
 def split_data(labels, val_prop, test_prop, seed):
@@ -126,20 +134,44 @@ def bin_feat(feat, bins):
 # ############### LINK PREDICTION DATA LOADERS ####################################
 
 
-def load_data_lp(dataset, use_feats, data_path):
+def load_data_lp(dataset, data_path, use_feats, data_split, val_prop, test_prop, split_seed, normalize_adj, normalize_feats):
+    nodes, edges = None, None
     if dataset in ['cora', 'pubmed']:
         adj, features = load_citation_data(dataset, use_feats, data_path)[:2]
     elif dataset == 'disease_lp':
         adj, features = load_synthetic_data(dataset, use_feats, data_path)[:2]
     elif dataset == 'airport':
         adj, features = load_data_airport(dataset, data_path, return_label=False)
-    elif dataset == 'kg':
-        adj, features = load_data_kg(dataset, data_path, return_label=False)
-    elif dataset.startswith(('tr', 'Disease', 'GO', 'Genomic', 'Phen')):
-        adj, features = load_synthetic_data(dataset,use_feats, data_path)[:2]
+    elif dataset.startswith(('tr', 'Disease', 'GO', 'Genomic', 'Phen', 'split')):
+        # nodes, edges = id_string_to_numerical(dataset, data_path)
+        # adj, features = load_data_kg(nodes, edges, use_feats)[:2]
+        adj, features = load_synthetic_data(dataset, use_feats, data_path)[:2]
+
     else:
         raise FileNotFoundError('Dataset {} is not supported.'.format(dataset))
-    data = {'adj_train': adj, 'features': features}
+    data = {'adj': adj, 'features': features}
+    
+    adj = data['adj']
+                
+    if data_split:
+        adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges_rnd(
+                    adj, val_prop, test_prop, split_seed
+            )
+    else:
+        adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
+                    adj, edges
+            )
+        
+    data['adj_train'] = adj_train
+    data['train_edges'], data['train_edges_false'] = train_edges, train_edges_false
+    data['val_edges'], data['val_edges_false'] = val_edges, val_edges_false
+    data['test_edges'], data['test_edges_false'] = test_edges, test_edges_false
+    data['adj_train_norm'], data['features'] = process(
+        data['adj_train'], data['features'], normalize_adj, normalize_feats
+    )
+    if dataset == 'airport':
+        data['features'] = augment(data['adj_train'], data['features'])
+        
     return data
 
 
@@ -219,7 +251,7 @@ def load_synthetic_data(dataset_str, use_feats, data_path):
     idx_counter = 0
     edges = []
     with open(os.path.join(data_path, "{}.edges.csv".format(dataset_str)), 'r') as f:
-        all_edges = f.readlines()
+        all_edges = f.readlines()        
     for line in all_edges:
         n1, n2 = line.rstrip().split(',')
         if n1 in object_to_idx:
@@ -237,15 +269,15 @@ def load_synthetic_data(dataset_str, use_feats, data_path):
         edges.append((i, j))
     adj = np.zeros((len(object_to_idx), len(object_to_idx)))
     for i, j in edges:
-        adj[i, j] = 1.  # comment this line for directed adjacency matrix
+        #adj[i, j] = 1.  # comment this line for directed adjacency matrix
         adj[j, i] = 1.
     if use_feats:
         features = sp.load_npz(os.path.join(data_path, "{}.feats.npz".format(dataset_str)))
+        
     else:
         features = sp.eye(adj.shape[0])
     labels = np.load(os.path.join(data_path, "{}.labels.npy".format(dataset_str)), allow_pickle=True)
     return sp.csr_matrix(adj, dtype=np.int8), features, labels
-
 
 def load_data_airport(dataset_str, data_path, return_label=False):
     graph = pkl.load(open(os.path.join(data_path, dataset_str + '.p'), 'rb'))
@@ -260,17 +292,34 @@ def load_data_airport(dataset_str, data_path, return_label=False):
     else:
         return sp.csr_matrix(adj), features
     
-def load_data_kg(dataset_str, data_path, return_label=False):
-    graph = pkl.load(open(os.path.join(data_path, dataset_str + '.p'), 'rb'))
-    adj = nx.adjacency_matrix(graph)
-    #features = np.array([graph._node[u]['feat'] for u in graph.nodes()])
-    features = np.empty((len(graph.nodes),1))
-    if return_label:
-        label_idx = 4
-        labels = features[:, label_idx]
-        features = features[:, :label_idx]
-        labels = bin_feat(labels, bins=[7.0/7, 8.0/7, 9.0/7])
-        return sp.csr_matrix(adj), features, labels
+def id_string_to_numerical(dataset_str, data_path):
+    edges = pd.read_csv(os.path.join(data_path, f"{dataset_str}.edges.csv"), low_memory=False)
+    nodes = pd.read_csv(os.path.join(data_path, f"{dataset_str}.nodes.csv"), low_memory=False)
+    name_to_index_map = {v: k for k, v in nodes['name'].to_dict().items()}
+    edges['subject'] = edges['subject'].map(name_to_index_map)
+    edges['object'] = edges['object'].map(name_to_index_map)
+    nodes['name'] = nodes['name'].map(name_to_index_map)
+    return edges, nodes
+    
+def load_data_kg(nodes, edges, use_feats=False):    
+    rows = edges['subject'].values.flatten()
+    cols = edges['object'].values.flatten()
+    n_nodes = len(nodes)
+    
+    if use_feats: 
+        def strings_to_categorical(strings):
+            label_encoder = LabelEncoder()
+            categories = label_encoder.fit_transform(strings)
+            return dict(zip(strings, categories))
+        
+        predicate_to_category_map = strings_to_categorical(edges['predicate'].unique())
+        edges['predicate'] = edges['predicate'].map(predicate_to_category_map)
+        data = edges['predicate'].values.flatten()
+        features = sp.csr_matrix((data, (rows, cols)), shape=(n_nodes, n_nodes))
     else:
-        return sp.csr_matrix(adj), features
-
+        features = sp.eye(len(nodes))
+        
+    nodes = nodes.sort_values(by='name')
+    labels = nodes['type'].values.flatten()
+            
+    return sp.csr_matrix((np.ones(len(edges)), (rows, cols)), shape=(n_nodes, n_nodes), dtype=np.int8), features, labels
