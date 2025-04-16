@@ -72,9 +72,9 @@ class HyperbolicGraphConvolution(nn.Module):
         h = checkpoint(self.linear, x, use_reentrant=False)
         h = checkpoint(self.agg, h, adj, use_reentrant=False)
         h = checkpoint(self.hyp_act, h, use_reentrant=False)
-        h= self.linear(x)
-        h = self.agg(h, adj)
-        h = self.hyp_act(h)
+        # h = self.linear.forward(x)
+        # h = self.agg.forward(h, adj)
+        # h = self.hyp_act.forward(h)
         output = h, adj
         return output
 
