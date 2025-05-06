@@ -10,7 +10,7 @@ from layers.att_layers import GraphAttentionLayer
 import layers.hyp_layers as hyp_layers
 from layers.layers import GraphConvolution, Linear, get_dim_act
 import utils.math_utils as pmath
-
+import gc
 
 class Encoder(nn.Module):
     """

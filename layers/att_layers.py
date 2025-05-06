@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.amp import autocast
+import utils.sparse_mx_utils
 
 
 class DenseAtt(nn.Module):
@@ -49,7 +50,7 @@ class SpecialSpmmFunction(torch.autograd.Function):
             b = b.to(grad_output.dtype)
             grad_a_dense = grad_output.matmul(b.t())
             edge_idx = a._indices()[0, :] * ctx.N + a._indices()[1, :]
-            grad_values = grad_a_dense.view(-1)[edge_idx]
+            grad_values = grad_a_dense.reshape(-1)[edge_idx]
         if ctx.needs_input_grad[3]:
             with autocast('cuda', enabled=False):
                 grad_b = a.t().to_dense().matmul(grad_output)
@@ -143,7 +144,7 @@ class GraphAttentionLayer(nn.Module):
         if self.concat:
             h = torch.cat([att(x, adj) for att in self.attentions], dim=1)
         else:
-            h_cat = torch.cat([att(x, adj).view((-1, self.output_dim, 1)) for att in self.attentions], dim=2)
+            h_cat = torch.cat([att(x, adj).reshape((-1, self.output_dim, 1)) for att in self.attentions], dim=2)
             h = torch.mean(h_cat, dim=2)
         h = F.dropout(h, self.dropout, training=self.training)
         return (h, adj)

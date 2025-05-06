@@ -14,7 +14,7 @@ class Euclidean(Manifold):
 
     def normalize(self, p):
         dim = p.size(-1)
-        p.view(-1, dim).renorm_(2, 0, 1.)
+        p.reshape(-1, dim).renorm_(2, 0, 1.)
         return p
 
     def sqdist(self, p1, p2, c):

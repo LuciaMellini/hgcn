@@ -6,7 +6,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
 from torch.nn.modules.module import Module
+import gc
 from torch.utils.checkpoint import checkpoint
+import utils.sparse_mx_utils
+from utils.sparse_mx_utils import tanh, artanh
 
 from layers.att_layers import DenseAtt
 
@@ -70,6 +73,9 @@ class HyperbolicGraphConvolution(nn.Module):
     def forward(self, input):
         x, adj = input
         h = checkpoint(self.linear, x, use_reentrant=False)
+        # del x
+        # torch.cuda.empty_cache()
+        # gc.collect()
         h = checkpoint(self.agg, h, adj, use_reentrant=False)
         h = checkpoint(self.hyp_act, h, use_reentrant=False)
         # h = self.linear.forward(x)
@@ -101,15 +107,25 @@ class HypLinear(nn.Module):
         init.constant_(self.bias, 0)
 
     def forward(self, x):
-        drop_weight = F.dropout(self.weight, self.dropout, training=self.training)
+        print("HypLinear forward")
+        self.c = self.c.to(x.device)
+        self.bias = self.bias.to(x.device)
+        drop_weight = F.dropout(self.weight, self.dropout, training=self.training).to(x.device)
+        print("HypLinear drop_weight shape", drop_weight.shape)
         mv = self.manifold.mobius_matvec(drop_weight, x, self.c)
+        print("HypLinear mv shape", mv.shape)
         res = self.manifold.proj(mv, self.c)
         if self.use_bias:
-            bias = self.manifold.proj_tan0(self.bias.view(1, -1), self.c)
+            bias = self.manifold.proj_tan0(self.bias.reshape(1, -1), self.c)
+            print("HypLinear bias shape", bias.shape)
             hyp_bias = self.manifold.expmap0(bias, self.c)
+            print("HypLinear hyp_bias shape", hyp_bias.shape)
             hyp_bias = self.manifold.proj(hyp_bias, self.c)
+            print("HypLinear hyp_bias proj shape", hyp_bias.shape)
             res = self.manifold.mobius_add(res, hyp_bias, c=self.c)
+            print("HypLinear res after bias shape", res.shape)
             res = self.manifold.proj(res, self.c)
+        print("HypLinear res shape", res.shape)
         return res
 
     def extra_repr(self):
@@ -136,6 +152,7 @@ class HypAgg(Module):
             self.att = DenseAtt(in_features, dropout)
 
     def forward(self, x, adj):
+        print("HypAgg forward")
         x_tangent = self.manifold.logmap0(x, c=self.c)
         if self.use_att:
             if self.local_agg:
@@ -144,8 +161,12 @@ class HypAgg(Module):
                     x_local_tangent.append(self.manifold.logmap(x[i], x, c=self.c))
                 x_local_tangent = torch.stack(x_local_tangent, dim=0)
                 adj_att = self.att(x_tangent, adj)
-                att_rep = adj_att.unsqueeze(-1) * x_local_tangent
+                # att_rep = adj_att.unsqueeze(-1) * x_local_tangent
                 support_t = torch.sum(adj_att.unsqueeze(-1) * x_local_tangent, dim=1)
+                del x_local_tangent
+                torch.cuda.empty_cache()
+                gc.collect()
+
                 output = self.manifold.proj(self.manifold.expmap(x, support_t, c=self.c), c=self.c)
                 return output
             else:
@@ -154,8 +175,12 @@ class HypAgg(Module):
                     support_t = torch.matmul(adj_att, x_tangent)
         else:
             with torch.amp.autocast('cuda',enabled=False):
-                support_t = torch.spmm(adj, x_tangent.float())
+                support_t = torch.spmm(adj.float(), x_tangent.float())
+        del x_tangent
+        torch.cuda.empty_cache()
+        gc.collect()
         output = self.manifold.proj(self.manifold.expmap0(support_t, c=self.c), c=self.c)
+        print("HypAgg output shape", output.shape)
         return output
 
     def extra_repr(self):
@@ -175,11 +200,15 @@ class HypAct(Module):
         self.act = act
 
     def forward(self, x):
+        print("HypAct forward")
         xt = self.act(self.manifold.logmap0(x, c=self.c_in))
         xt = self.manifold.proj_tan0(xt, c=self.c_out)
-        return self.manifold.proj(self.manifold.expmap0(xt, c=self.c_out), c=self.c_out)
+        result = self.manifold.proj(self.manifold.expmap0(xt, c=self.c_out), c=self.c_out)
+        print("HypAct result shape", result.shape)
+        return result
 
     def extra_repr(self):
         return 'c_in={}, c_out={}'.format(
             self.c_in, self.c_out
     )
+        

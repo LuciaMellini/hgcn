@@ -25,7 +25,7 @@ class Hyperboloid(Manifold):
     def minkowski_dot(self, x, y, keepdim=True):
         res = torch.sum(x * y, dim=-1) - 2 * x[..., 0] * y[..., 0]
         if keepdim:
-            res = res.view(res.shape + (1,))
+            res = res.reshape(res.shape + (1,))
         return res
 
     def minkowski_norm(self, u, keepdim=True):
@@ -91,7 +91,7 @@ class Hyperboloid(Manifold):
         K = 1. / c
         sqrtK = K ** 0.5
         d = u.size(-1) - 1
-        x = u.narrow(-1, 1, d).view(-1, d)
+        x = u.narrow(-1, 1, d).reshape(-1, d)
         x_norm = torch.norm(x, p=2, dim=1, keepdim=True)
         x_norm = torch.clamp(x_norm, min=self.min_norm)
         theta = x_norm / sqrtK
@@ -104,7 +104,7 @@ class Hyperboloid(Manifold):
         K = 1. / c
         sqrtK = K ** 0.5
         d = x.size(-1) - 1
-        y = x.narrow(-1, 1, d).view(-1, d)
+        y = x.narrow(-1, 1, d).reshape(-1, d)
         y_norm = torch.norm(y, p=2, dim=1, keepdim=True)
         y_norm = torch.clamp(y_norm, min=self.min_norm)
         res = torch.zeros_like(x)

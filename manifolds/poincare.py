@@ -1,10 +1,9 @@
 """Poincare ball manifold."""
-
 import torch
 
 from manifolds.base import Manifold
-from utils.math_utils import artanh, tanh
-
+from utils.sparse_mx_utils import sparse_where_same_indices, sparse_zero_prod_dim, tanh, artanh
+from torch.amp import autocast
 
 class PoincareBall(Manifold):
     """
@@ -40,11 +39,23 @@ class PoincareBall(Manifold):
         return dp
 
     def proj(self, x, c):
-        norm = torch.clamp_min(x.norm(dim=-1, keepdim=True, p=2), self.min_norm)
+        norm = x.norm(dim=-1, keepdim=True, p=2).clamp_min(self.min_norm)
         maxnorm = (1 - self.eps[x.dtype]) / (c ** 0.5)
-        cond = norm > maxnorm
-        projected = x / norm * maxnorm
-        return torch.where(cond, projected, x)
+        if x.is_sparse:    
+            cond = norm.to_dense() > maxnorm
+            print        
+            norm = torch.broadcast_to(norm, x.shape)
+            maxnorm = torch.broadcast_to(maxnorm, x.shape)
+            cond = torch.broadcast_to(cond, x.size())
+        else:
+            cond = norm > maxnorm
+        if x.is_sparse:
+            projected = x.sparse_divide(norm, self.min_norm) * maxnorm
+            projection = sparse_where_same_indices(cond, projected, x)
+        else:
+            projected = x / norm * maxnorm
+            projection = torch.where(cond, projected, x)
+        return projection
 
     def proj_tan(self, u, p, c):
         return u
@@ -55,11 +66,14 @@ class PoincareBall(Manifold):
     def expmap(self, u, p, c):
         sqrt_c = c ** 0.5
         u_norm = u.norm(dim=-1, p=2, keepdim=True).clamp_min(self.min_norm)
-        second_term = (
-                tanh(sqrt_c / 2 * self._lambda_x(p, c) * u_norm)
-                * u
-                / (sqrt_c * u_norm)
-        )
+        if u.is_sparse:
+            second_term = tanh(sqrt_c / 2 * self._lambda_x(p, c) * u_norm) * u.sparse_divide(sqrt_c * u_norm)
+        else:
+            second_term = (
+                    tanh(sqrt_c / 2 * self._lambda_x(p, c) * u_norm)
+                    * u
+                    / (sqrt_c * u_norm)
+            )
         gamma_1 = self.mobius_add(p, second_term, c)
         return gamma_1
 
@@ -71,34 +85,134 @@ class PoincareBall(Manifold):
         return 2 / sqrt_c / lam * artanh(sqrt_c * sub_norm) * sub / sub_norm
 
     def expmap0(self, u, c):
-        sqrt_c = c ** 0.5
-        u_norm = torch.clamp_min(u.norm(dim=-1, p=2, keepdim=True), self.min_norm)
-        gamma_1 = tanh(sqrt_c * u_norm) * u / (sqrt_c * u_norm)
+        sqrt_c = c ** 0.5    
+        u_norm = u.float().norm(dim=-1, p=2, keepdim=True).clamp_min(self.min_norm)
+        u_norm = torch.broadcast_to(u_norm, (u.shape))
+        if u.is_sparse:
+            gamma_1 = (tanh(sqrt_c * u_norm) * u).sparse_divide(sqrt_c * u_norm)
+        else:
+            gamma_1 = (tanh(sqrt_c * u_norm) * u ) / (sqrt_c * u_norm)
         return gamma_1
 
     def logmap0(self, p, c):
         sqrt_c = c ** 0.5
         p_norm = p.norm(dim=-1, p=2, keepdim=True).clamp_min(self.min_norm)
-        scale = 1. / sqrt_c * artanh(sqrt_c * p_norm) / p_norm
+        if p.is_sparse:
+            p_norm = torch.broadcast_to(p_norm, p.shape)
+            scale = 1. / sqrt_c * artanh(sqrt_c * p_norm) * p.sparse_divide(p_norm)
+        else:
+            scale = 1. / sqrt_c * artanh(sqrt_c * p_norm) / p_norm
         return scale * p
 
     def mobius_add(self, x, y, c, dim=-1):
+        if x.is_sparse or y.is_sparse:
+            if not x.is_sparse:
+                x = x.to_sparse(layout=torch.sparse_coo)
+            if not y.is_sparse:
+                y = y.to_sparse(layout=torch.sparse_coo)
+
+            if x.shape > y.shape:
+                y = torch.broadcast_to(y, x.shape)
+                x = x.coalesce()
+                
+            elif y.shape > x.shape:
+                x = torch.broadcast_to(x, y.shape)
+                y = y.coalesce()
+            
         x2 = x.pow(2).sum(dim=dim, keepdim=True)
         y2 = y.pow(2).sum(dim=dim, keepdim=True)
         xy = (x * y).sum(dim=dim, keepdim=True)
-        num = (1 + 2 * c * xy + c * y2) * x + (1 - c * x2) * y
-        denom = 1 + 2 * c * xy + c ** 2 * x2 * y2
+        
+        if x.is_sparse or y.is_sparse:
+            # x2, y2 and xy have the same shapes
+            x2 = torch.broadcast_to(x2, x.shape)
+            y2 = torch.broadcast_to(y2, x.shape)
+            xy = torch.broadcast_to(xy, x.shape)
+            # x2 = x2.coalesce()
+            # c = c.unsqueeze(len(x2.shape) - 1)
+            # c = torch.broadcast_to(c, x2.shape)
+            
+        
+            
+            # twos = 2 * ones
+            
+            # Calculate numerator components
+            term1 = 2 * c * xy
+            term2 = c * y2
+            print("term1 is sparse", term1.is_sparse)
+            print("term2 is sparse", term2.is_sparse)
+            term3 = x + (term1 + term2) * x
+            term4 = y - (c * x2) * y
+            num = term3 + term4
+            
+            # Calculate denominator components
+            term5 = 2 * c * xy
+            term5 = term5.coalesce()
+            term6 = c ** 2 * x2 * y2
+            ones = torch.sparse_coo_tensor(
+                indices=term5.indices(),
+                values=torch.ones_like(term5.values()),
+                size=term5.size(),
+                device=term5.device,
+                dtype=term5.dtype
+                )
+            denom = ones + term5 + term6
+        else:
+            # Original dense implementation
+            num = (2 * c * xy + c * y2 + 1) * x + (1 - c * x2) * y
+            denom = 1 + 2 * c * xy + c ** 2 * x2 * y2
+        if denom.is_sparse:
+            return num.sparse_divide(denom, self.min_norm)        
         return num / denom.clamp_min(self.min_norm)
-
+    
     def mobius_matvec(self, m, x, c):
+        print("x shape", x.shape)
+        print("m shape", m.shape)
         sqrt_c = c ** 0.5
         x_norm = x.norm(dim=-1, keepdim=True, p=2).clamp_min(self.min_norm)
-        mx = x @ m.transpose(-1, -2)
+        if x.is_sparse or m.is_sparse:
+            if not x.is_sparse:
+                x = x.to_sparse(layout=torch.sparse_coo)
+            if not m.is_sparse: 
+                m = m.to_sparse(layout=torch.sparse_coo)
+            if x.shape[1] > m.shape[0]:
+                m = torch.broadcast_to(m, (m.shape[0], x.shape[1]))
+            elif m.shape[1] > x.shape[1]:
+                x = torch.broadcast_to(x, (x.shape[0], m.shape[1]))  
+            with autocast('cuda', enabled=False):
+                mx = torch.sparse.mm(x, m.transpose(-1, -2))
+        else:
+            mx = x @ m.transpose(-1, -2)
         mx_norm = mx.norm(dim=-1, keepdim=True, p=2).clamp_min(self.min_norm)
-        res_c = tanh(mx_norm / x_norm * artanh(sqrt_c * x_norm)) * mx / (mx_norm * sqrt_c)
-        cond = (mx == 0).prod(-1, keepdim=True, dtype=torch.uint8)
-        res_0 = torch.zeros(1, dtype=res_c.dtype, device=res_c.device)
-        res = torch.where(cond, res_0, res_c)
+        
+        if x.is_sparse:
+            res_c = torch.broadcast_to(tanh(mx_norm.sparse_divide(x_norm)), x_norm.shape) * artanh(sqrt_c * x_norm)
+        else:
+            res_c = tanh(mx_norm / x_norm * artanh(sqrt_c * x_norm))
+
+        if mx.is_sparse:
+            res_c = torch.broadcast_to(res_c, mx.shape)
+            res_c = res_c * torch.broadcast_to(mx.sparse_divide(mx_norm * sqrt_c), res_c.shape)
+
+        else:   
+            res_c = res_c * mx / (mx_norm * sqrt_c)
+
+        if mx.is_sparse:
+            cond = sparse_zero_prod_dim(mx, -1, keepdim=True, dtype=torch.bool)
+            cond = torch.broadcast_to(cond, res_c.size())
+            res_c = res_c.coalesce()
+            res_1 = torch.sparse_coo_tensor(
+                res_c.indices(),
+                torch.ones_like(res_c.values()),
+                res_c.size(),
+                device=res_c.device,
+                dtype=res_c.dtype
+            )
+            res = sparse_where_same_indices(cond, res_c, res_1)
+        else:
+            cond = (mx == 0).prod(-1, keepdim=True, dtype=torch.uint8)
+            res_0 = torch.zeros(1, dtype=res_c.dtype, device=res_c.device)
+            res = torch.where(cond, res_0, res_c)
         return res
 
     def init_weights(self, w, c, irange=1e-5):

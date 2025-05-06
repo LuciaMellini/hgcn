@@ -66,4 +66,3 @@ class Arcosh(torch.autograd.Function):
     def backward(ctx, grad_output):
         input, = ctx.saved_tensors
         return grad_output / (input ** 2 - 1) ** 0.5
-
