@@ -72,7 +72,7 @@ class PoincareBall(Manifold):
 
     def expmap0(self, u, c):
         sqrt_c = c ** 0.5
-        u_norm = torch.clamp_min(u.norm(dim=-1, p=2, keepdim=True), self.min_norm)
+        u_norm = torch.clamp_min(u.float().norm(dim=-1, p=2, keepdim=True), self.min_norm)
         gamma_1 = tanh(sqrt_c * u_norm) * u / (sqrt_c * u_norm)
         return gamma_1
 

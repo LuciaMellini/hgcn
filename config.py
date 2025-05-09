@@ -51,7 +51,7 @@ config_args = {
         'normalize-feats': (1, 'whether to normalize input node features'),
         'normalize-adj': (1, 'whether to row-normalize the adjacency matrix'),
         'split-seed': (1234, 'seed for data splits (train/test/val)'),
-        'data-split': (True, 'path to data split file'),
+        'data-split': (1, 'path to data split file'),
         'neg-sampling': (-1, 'amount of negative samples to use for link prediction, -1 for no negative sampling'),
     }
 }

@@ -154,7 +154,7 @@ class HypAgg(Module):
                     support_t = torch.matmul(adj_att, x_tangent)
         else:
             with torch.amp.autocast('cuda',enabled=False):
-                support_t = torch.spmm(adj, x_tangent.float())
+                support_t = torch.spmm(adj, x_tangent)
         output = self.manifold.proj(self.manifold.expmap0(support_t, c=self.c), c=self.c)
         return output
 

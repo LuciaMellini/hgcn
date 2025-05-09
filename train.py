@@ -104,7 +104,7 @@ def train(args):
         #with torch.autograd.set_detect_anomaly(True):
 
         with autocast(device_type='cuda'): 
-            embeddings = model.encode(data['features'], data['adj_train_norm'])
+            embeddings = model.encode(data['features'], data['adj_train'])
         #logging.info("After model encode: "+torch.cuda.memory_summary())
 
         train_metrics = model.compute_metrics(embeddings, data, 'train')
