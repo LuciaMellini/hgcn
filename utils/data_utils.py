@@ -9,7 +9,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 import torch
-
+import gc
 from sklearn.preprocessing import LabelEncoder
 
 
@@ -18,24 +18,27 @@ def load_data(args, datapath):
     if args.task == 'nc':
         data = load_data_nc(args.dataset, args.use_feats, datapath, args.split_seed)
     else:
-        data = load_data_lp(args.dataset, datapath, args.use_feats, args.data_split, args.val_prop, args.test_prop, args.split_seed, args.normalize_adj, args.normalize_feats)
+        data = load_data_lp(args.dataset, datapath, args.use_feats, args.data_split, args.val_prop, args.test_prop, args.split_seed, args.normalize_adj, args.normalize_feats, args.neg_sampling)
         
-       
     return data
 
 
 # ############### FEATURES PROCESSING ####################################
 
 
-def process(adj, features, normalize_adj, normalize_feats):
-    if sp.isspmatrix(features):
-        features = np.array(features.todense())
-    if normalize_feats:
-        features = normalize(features)
-    features = torch.Tensor(features)
+def process(adj, features, normalize_adj, use_feats, normalize_feats):
+    if use_feats:
+        if normalize_feats:
+            features = normalize(features)
+        
     if normalize_adj:
-        adj = normalize(adj + sp.eye(adj.shape[0]))
-    adj = sparse_mx_to_torch_sparse_tensor(adj)
+        adj = normalize(adj + sp.eye(adj.shape[0], dtype=adj.dtype))
+        
+    def get_torch_dtype_from_np_dtype(dtype):
+        return torch.from_numpy(np.array([], dtype=dtype)).dtype
+    
+    features = sparse_mx_to_torch_sparse_tensor(features, dtype = get_torch_dtype_from_np_dtype(features.dtype))
+    adj = sparse_mx_to_torch_sparse_tensor(adj, dtype = get_torch_dtype_from_np_dtype(adj.dtype))
     return adj, features
 
 
@@ -49,15 +52,15 @@ def normalize(mx):
     return mx
 
 
-def sparse_mx_to_torch_sparse_tensor(sparse_mx):
+def sparse_mx_to_torch_sparse_tensor(sparse_mx, dtype=torch.float):
     """Convert a scipy sparse matrix to a torch sparse tensor."""
     sparse_mx = sparse_mx.tocoo()
     indices = torch.from_numpy(
-            np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64)
+            np.vstack((sparse_mx.row, sparse_mx.col))
     )
     values = torch.Tensor(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
-    return torch.sparse_coo_tensor(indices, values, shape)
+    return torch.sparse_coo_tensor(indices, values, shape, dtype=dtype)
 
 
 def augment(adj, features, normalize_feats=True):
@@ -87,15 +90,18 @@ def mask_edges_rnd(adj, val_prop, test_prop, seed):
     n_test = int(m_pos * test_prop)   
     val_edges, test_edges, train_edges = pos_edges[:n_val], pos_edges[n_val:n_test + n_val], pos_edges[n_test + n_val:]
 
-    val_edges_false, test_edges_false, train_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val], neg_edges[n_test + n_val:]
-
-    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
+    val_edges_false, test_edges_false = neg_edges[:n_val], neg_edges[n_val:n_test + n_val]
+    train_edges_false = np.concatenate([neg_edges, val_edges, test_edges], axis=0)
+    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=adj.dtype)
     return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(test_edges_false)  
 
 def mask_edges(adj, edges, neg_sampling):
-    train_idx = edges[edges['split'] == 'train'].index
-    valid_idx = edges[edges['split'] == 'valid'].index
-    test_idx = edges[edges['split'] == 'test'].index
+    try:
+        train_idx = edges[edges['split'] == 'train'].index
+        valid_idx = edges[edges['split'] == 'valid'].index
+        test_idx = edges[edges['split'] == 'test'].index
+    except KeyError:
+        raise KeyError("The edges DataFrame does not contain the 'split' column. Please ensure the DataFrame has been properly prepared with train/valid/test splits.")
 
     # Extract subject-object pairs as numpy arrays
     train_edges = edges.loc[train_idx, ['subject', 'object']].values
@@ -103,10 +109,11 @@ def mask_edges(adj, edges, neg_sampling):
     test_edges = edges.loc[test_idx, ['subject', 'object']].values
 
     if neg_sampling==-1:
-        train_edges_false = np.array()
-        val_edges_false = np.array()
-        test_edges_false = np.array()
-    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=np.int8)
+        train_edges_false = np.empty((0, 2), dtype=np.bool)
+        val_edges_false = np.empty((0, 2), dtype=np.bool)
+        test_edges_false = np.empty((0, 2), dtype=np.bool)
+    adj_train = sp.csr_matrix((np.ones(train_edges.shape[0]), (train_edges[:, 0], train_edges[:, 1])), shape=adj.shape, dtype=adj.dtype)
+    
     return adj_train, torch.IntTensor(train_edges), torch.IntTensor(train_edges_false), torch.IntTensor(val_edges), torch.IntTensor(val_edges_false), torch.IntTensor(test_edges), torch.IntTensor(test_edges_false)  
 
 
@@ -146,38 +153,36 @@ def load_data_lp(dataset, data_path, use_feats, data_split, val_prop, test_prop,
         adj, features = load_synthetic_data(dataset, use_feats, data_path)[:2]
     elif dataset == 'airport':
         adj, features = load_data_airport(dataset, data_path, return_label=False)
-    elif dataset.startswith(('tr', 'Disease', 'GO', 'Genomic', 'Phen', 'split')):
+    elif dataset.startswith(('tr', 'Disease', 'GO', 'Genomic', 'Phen')):
         adj, features = load_synthetic_data(dataset, use_feats, data_path)[:2]
-        
     elif dataset.startswith('split'):
         nodes, edges = id_string_to_numerical(dataset, data_path)
         adj, features = load_data_kg(nodes, edges, use_feats)[:2]
-
     else:
         raise FileNotFoundError('Dataset {} is not supported.'.format(dataset))
-    data = {'adj': adj, 'features': features}
-    
-    adj = data['adj']
-                
+    data = {'features': features}  
+                  
     if data_split:
         adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges_rnd(
                     adj, val_prop, test_prop, split_seed
             )
-    else:
+    else:        
         adj_train, train_edges, train_edges_false, val_edges, val_edges_false, test_edges, test_edges_false = mask_edges(
                     adj, edges, neg_sampling
             )
-        
+    
+    del adj
+    torch.cuda.empty_cache()
+    gc.collect()
     data['adj_train'] = adj_train
     data['train_edges'], data['train_edges_false'] = train_edges, train_edges_false
     data['val_edges'], data['val_edges_false'] = val_edges, val_edges_false
     data['test_edges'], data['test_edges_false'] = test_edges, test_edges_false
-    data['adj_train_norm'], data['features'] = process(
-        data['adj_train'], data['features'], normalize_adj, normalize_feats
+    data['adj_train'], data['features'] = process(
+        data['adj_train'], data['features'], normalize_adj, use_feats, normalize_feats
     )
     if dataset == 'airport':
         data['features'] = augment(data['adj_train'], data['features'])
-        
     return data
 
 
@@ -239,9 +244,11 @@ def load_citation_data(dataset_str, use_feats, data_path, split_seed=None):
     idx_train = list(range(len(y)))
     idx_val = range(len(y), len(y) + 500)
 
-    adj = nx.adjacency_matrix(nx.from_dict_of_lists(graph))
+    adj = nx.adjacency_matrix(nx.from_dict_of_lists(graph), dtype = np.bool)
+    # Convert adjacency matrix to CSR format with appropriate shape and dtype
+    adj = sp.csr_matrix(adj, dtype=np.bool)
     if not use_feats:
-        features = sp.eye(adj.shape[0])
+        features = sp.eye(adj.shape[0], dtype=np.bool)
     return adj, features, labels, idx_train, idx_val, idx_test
 
 
@@ -281,9 +288,9 @@ def load_synthetic_data(dataset_str, use_feats, data_path):
         features = sp.load_npz(os.path.join(data_path, "{}.feats.npz".format(dataset_str)))
         
     else:
-        features = sp.eye(adj.shape[0])
+        features = sp.eye(adj.shape[0], dtype=np.bool)
     labels = np.load(os.path.join(data_path, "{}.labels.npy".format(dataset_str)), allow_pickle=True)
-    return sp.csr_matrix(adj, dtype=np.int8), features, labels
+    return sp.csr_matrix(adj, dtype=np.bool), features, labels
 
 def load_data_airport(dataset_str, data_path, return_label=False):
     graph = pkl.load(open(os.path.join(data_path, dataset_str + '.p'), 'rb'))
@@ -299,19 +306,22 @@ def load_data_airport(dataset_str, data_path, return_label=False):
         return sp.csr_matrix(adj), features
     
 def id_string_to_numerical(dataset_str, data_path):
-    edges = pd.read_csv(os.path.join(data_path, f"{dataset_str}.edges.csv"), low_memory=False)
-    nodes = pd.read_csv(os.path.join(data_path, f"{dataset_str}.nodes.csv"), low_memory=False)
+    edges = pd.read_csv(os.path.join(data_path, f"{dataset_str}.edges.csv"), low_memory=True)
+    nodes = pd.read_csv(os.path.join(data_path, f"{dataset_str}.nodes.csv"), low_memory=True)
     name_to_index_map = {v: k for k, v in nodes['name'].to_dict().items()}
     edges['subject'] = edges['subject'].map(name_to_index_map)
     edges['object'] = edges['object'].map(name_to_index_map)
     nodes['name'] = nodes['name'].map(name_to_index_map)
-    return edges, nodes
+    return nodes, edges
     
 def load_data_kg(nodes, edges, use_feats=False):    
+    n_nodes = len(nodes)
+    nodes = nodes.sort_values(by='name')
+    labels = nodes['type'].values.flatten()
+    del nodes
     rows = edges['subject'].values.flatten()
     cols = edges['object'].values.flatten()
-    n_nodes = len(nodes)
-    
+    adj = sp.csr_matrix((np.ones(len(edges)), (rows, cols)), shape=(n_nodes, n_nodes), dtype=np.bool)
     if use_feats: 
         def strings_to_categorical(strings):
             label_encoder = LabelEncoder()
@@ -323,9 +333,5 @@ def load_data_kg(nodes, edges, use_feats=False):
         data = edges['predicate'].values.flatten()
         features = sp.csr_matrix((data, (rows, cols)), shape=(n_nodes, n_nodes))
     else:
-        features = sp.eye(len(nodes))
-        
-    nodes = nodes.sort_values(by='name')
-    labels = nodes['type'].values.flatten()
-            
-    return sp.csr_matrix((np.ones(len(edges)), (rows, cols)), shape=(n_nodes, n_nodes), dtype=np.int8), features, labels
+        features = sp.eye(n_nodes, dtype=np.bool, format='csr')          
+    return adj, features, labels
