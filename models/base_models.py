@@ -14,7 +14,6 @@ from models.decoders import model2decoder
 from utils.eval_utils import acc_f1
 from torch.amp import autocast
 
-
 class BaseModel(nn.Module):
     """
     Base model for graph embedding tasks.
@@ -112,10 +111,7 @@ class LPModel(BaseModel):
         return probs
 
     def compute_metrics(self, embeddings, data, split):
-        if split == 'train':
-            edges_false = data[f'{split}_edges_false'][np.random.randint(0, self.nb_false_edges, self.nb_edges)]
-        else:
-            edges_false = data[f'{split}_edges_false']
+        edges_false = data[f'{split}_edges_false']
         pos_scores = self.decode(embeddings, data[f'{split}_edges'])
         neg_scores = self.decode(embeddings, edges_false)
         with autocast(device_type='cuda', enabled=False):

@@ -8,6 +8,7 @@ config_args = {
         'dropout': (0.0, 'dropout probability'),
         'cuda': (-1, 'which cuda device to use (-1 for cpu training)'),
         'epochs': (5000, 'maximum number of epochs to train for'),
+        'batch-size': (1, 'batch size for training, 1 for full-batch training'),
         'weight-decay': (0., 'l2 regularization strength'),
         'optimizer': ('Adam', 'which optimizer to use, can be any of [Adam, RiemannianAdam]'),
         'momentum': (0.999, 'momentum in optimizer'),
@@ -47,12 +48,13 @@ config_args = {
         'dataset': ('cora', 'which dataset to use'),
         'val-prop': (0.05, 'proportion of validation edges for link prediction'),
         'test-prop': (0.1, 'proportion of test edges for link prediction'),
-        'use-feats': (1, 'whether to use node features or not'),
+        'use-feats': (0, 'whether to use node features or not'),
+        'use-labels': (0, 'whether to use edge labels or not'),
         'normalize-feats': (1, 'whether to normalize input node features'),
         'normalize-adj': (1, 'whether to row-normalize the adjacency matrix'),
         'split-seed': (1234, 'seed for data splits (train/test/val)'),
-        'data-split': (1, 'path to data split file'),
-        'neg-sampling': (-1, 'amount of negative samples to use for link prediction, -1 for no negative sampling'),
+        'rnd-split': (1, 'whether to split data randomly (1) or use fixed splits (0)'),
+        'neg-sampling': (0, 'amount of negative samples to use for link prediction, 0 for no negative sampling'),
     }
 }
 
